@@ -221,7 +221,7 @@
     <button id="inventoryAdd">+ WORK</button><button id="inventoryCsvImport">IMPORT CSV</button><button id="inventoryCsvExport">EXPORT CSV</button>
   </div>
   <div class="inventoryTableWrap"><table class="inventoryTable"><thead><tr><th></th><th>ID</th><th>TITLE</th><th>ARTIST</th><th>YEAR</th><th>MEDIUM</th><th>OBJECT SIZE</th><th>MOUNT</th><th>PLACEMENT</th></tr></thead><tbody id="inventoryBody"></tbody></table></div>
-  <div class="dialogFoot inventoryFoot"><span class="micro" id="inventorySelected">0 selected</span><button id="inventoryBulkTag">BULK TAG</button><button id="inventoryBulkMount">BULK MOUNT</button><button id="inventoryDelete" class="danger">DELETE SELECTED</button><span style="flex:1"></span><button id="inventoryClose">CLOSE</button></div>
+  <div class="dialogFoot inventoryFoot"><span class="micro" id="inventorySelected">0 selected</span><button id="inventoryBulkTag">BULK TAG</button><button id="inventoryBulkMount">BULK MOUNT</button><button id="inventoryBulkUnplace">BULK UNPLACE</button><button id="inventoryDelete" class="danger">DELETE SELECTED</button><span style="flex:1"></span><button id="inventoryClose">CLOSE</button></div>
 </dialog>
 
 <dialog id="printChoiceDialog"><div class="dialogHead">PLAN / PRINT</div><div class="dialogBody"><div class="printChoiceGrid"><button class="printChoice" id="printFullBtn"><b>EXHIBITION PACKAGE</b><span>Cover, review, every wall elevation, hanging schedules, and artwork schedule.</span></button><button class="printChoice" id="printWallBtn"><b>ACTIVE WALL SHEET</b><span>One installation-ready wall elevation with datums, hardware coordinates, architecture, and notes.</span></button><button class="printChoice" id="printWorkBtn"><b>SELECTED WORK CARD</b><span>Compact field sheet for the selected artwork and its exact mounting geometry.</span></button></div></div><div class="dialogFoot"><button id="printChoiceClose">CLOSE</button></div></dialog>
@@ -231,7 +231,7 @@
 <script>
 (() => {
 'use strict';
-const APP_VERSION='4.4.1', STORAGE_KEY='wall.field.instrument.project.v1';
+const APP_VERSION='4.4.2', STORAGE_KEY='wall.field.instrument.project.v1';
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const uid=(p='id')=>p+'_'+Math.random().toString(36).slice(2,9);
 const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
@@ -483,6 +483,26 @@ function hideContextMenu(){$('#contextMenu')?.classList.add('hidden')}
 function inventoryRows(){let arr=state.works.slice(),q=($('#inventorySearch')?.value||'').trim().toLowerCase(),filter=$('#inventoryFilter')?.value||'all',sort=$('#inventorySort')?.value||'id';if(q)arr=arr.filter(w=>[w.id,w.inventory,w.accession,w.title,w.artist,w.year,w.medium,w.collection,w.owner,(w.tags||[]).join(' ')].some(v=>String(v||'').toLowerCase().includes(q)));if(filter==='placed')arr=arr.filter(w=>placementForWorkId(w.id));if(filter==='unplaced')arr=arr.filter(w=>!placementForWorkId(w.id));if(filter==='incomplete')arr=arr.filter(workIncomplete);arr.sort((a,b)=>{if(sort==='width'||sort==='height')return (+a[sort]||0)-(+b[sort]||0);if(sort==='wall')return String(placementForWorkId(a.id)?.wall.name||'ZZZ').localeCompare(String(placementForWorkId(b.id)?.wall.name||'ZZZ'));return String(a[sort]||'').localeCompare(String(b[sort]||''),undefined,{numeric:true,sensitivity:'base'})});return arr}
 function renderInventory(){if(!state)return;const arr=inventoryRows(),selected=new Set(ui.inventorySelected||[]);$('#inventorySummary').textContent=`${arr.length} shown · ${state.works.length} total · ${unplacedWorks().length} unplaced`;$('#inventorySelected').textContent=`${selected.size} selected`;$('#inventoryBody').innerHTML=arr.map(w=>{const p=placementForWorkId(w.id),inc=workIncomplete(w);return `<tr data-inv-work="${esc(w.id)}"><td><input type="checkbox" data-inv-select="${esc(w.id)}" ${selected.has(w.id)?'checked':''}></td><td><b>${esc(w.id)}</b>${inc?'<div class="inventoryIncomplete">INCOMPLETE</div>':''}</td><td>${w.image?`<img class="inventoryThumb" src="${w.image}" alt="">`:''}${esc(w.title||'Untitled')}</td><td>${esc(w.artist||'—')}</td><td>${esc(w.year||'—')}</td><td>${esc(w.medium||'—')}</td><td>${fmt(w.width)} × ${fmt(w.height)}</td><td>${esc(mountLabel(w.mount?.type))}</td><td class="${p?'inventoryPlaced':''}">${p?`${esc(p.room.name)} / ${esc(p.wall.name)}<br><span class="micro">${esc(p.placement.status||'')}</span>`:'UNPLACED'}</td></tr>`}).join('')||'<tr><td colspan="9" class="micro">No works match the current filter.</td></tr>'}
 function openInventory(){if(!state){toast('Create an exhibition first');return}ui.inventorySelected=[];$('#inventoryDialog').showModal();renderInventory()}
+function bulkUnplaceInventory(){
+  const ids=ui.inventorySelected||[];
+  if(!ids.length){toast('Select one or more works first');return}
+  const placed=ids.filter(id=>workLocation(id));
+  const already=ids.length-placed.length;
+  if(!placed.length){toast('Selected works are already unplaced');return}
+  const note=already?` ${already} selected work${already===1?' is':'s are'} already unplaced.`:'';
+  if(!confirm(`Return ${placed.length} selected placed work${placed.length===1?'':'s'} to the Unplaced inventory?${note}`))return;
+  const set=new Set(placed);
+  mutate(()=>{
+    for(const r of state.rooms){
+      if(Array.isArray(r.floorPlacements))r.floorPlacements=r.floorPlacements.filter(p=>!set.has(p.workId));
+      for(const w of r.walls)w.placements=w.placements.filter(p=>!set.has(p.workId));
+    }
+    ui.selected=[];
+    ui.selectedSpatial=null;
+  });
+  renderInventory();
+  toast(`${placed.length} work${placed.length===1?'':'s'} returned to Unplaced`);
+}
 function inventoryActivate(workId){const p=placementForWorkId(workId);$('#inventoryDialog').close();if(p){state.active.roomId=p.room.id;state.active.wallId=p.wall.id;ui.view='wall';ui.selected=[p.placement.id];renderAll();setTimeout(zoomSelection,0)}else{const w=findWork(workId);openWorkDialog(w)}}
 
 function csvEscape(v){const s=String(v??'');return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s}
@@ -513,6 +533,7 @@ wireUI=function(){
   $('#inventoryBody').onclick=e=>{const cb=e.target.closest('[data-inv-select]');if(cb){const id=cb.dataset.invSelect,s=new Set(ui.inventorySelected||[]);cb.checked?s.add(id):s.delete(id);ui.inventorySelected=[...s];renderInventory();e.stopPropagation();return}const tr=e.target.closest('[data-inv-work]');if(tr)inventoryActivate(tr.dataset.invWork)};
   $('#inventoryBulkTag').onclick=()=>{const ids=ui.inventorySelected||[];if(!ids.length)return;const tag=prompt('Tag to add to selected works:');if(!tag)return;mutate(()=>ids.forEach(id=>{const w=findWork(id);if(w&&!w.tags.includes(tag))w.tags.push(tag)}));renderInventory()};
   $('#inventoryBulkMount').onclick=()=>{const ids=ui.inventorySelected||[];if(!ids.length)return;const type=prompt('Mount type: single, two-rings, wire, french-cleat, security-hanger, rail, standoff, custom');if(!type||!['single','two-rings','wire','french-cleat','security-hanger','rail','standoff','custom','none'].includes(type))return;mutate(()=>ids.forEach(id=>{const w=findWork(id);if(w)w.mount.type=type}));renderInventory()};
+  $('#inventoryBulkUnplace').onclick=bulkUnplaceInventory;
   $('#inventoryDelete').onclick=()=>{const ids=ui.inventorySelected||[];if(!ids.length||!confirm(`Delete ${ids.length} selected artwork record(s) and their placements?`))return;const set=new Set(ids);mutate(()=>{state.works=state.works.filter(w=>!set.has(w.id));state.rooms.forEach(r=>r.walls.forEach(w=>w.placements=w.placements.filter(p=>!set.has(p.workId))));ui.inventorySelected=[];ui.selected=[]});renderInventory()};
   document.addEventListener('keydown',e=>{if(e.target.matches('input,textarea,select'))return;if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='d'&&ui.selected.length){e.preventDefault();duplicateSelected()}if(e.key==='Delete'&&ui.selected.length){e.preventDefault();unplaceSelected()}if(e.key.toLowerCase()==='f'&&!e.metaKey&&!e.ctrlKey&&ui.selected.length)zoomSelection()});
 }
